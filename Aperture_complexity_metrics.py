@@ -119,8 +119,12 @@ def extract_beam_data_from_dataset(rp, beam_names=None):
     return results
 
 
-def compute_metrics(beam_data):
-    """Compute BA, BM, MFA, MAD, SAS, AAV, LSV, MCS for each beam."""
+def compute_metrics(beam_data, edge_c1=1.0, edge_c2=1.0, edge_scaling=1.0):
+    """Compute aperture metrics, including the edge metric from the supplied formula.
+
+    ``edge_c1`` and ``edge_c2`` weight leaf ends and leaf sides. ``edge_scaling``
+    is the global factor C used to convert M into the edge penalty P.
+    """
     summary = {}
 
     for beam_name, r in beam_data.items():
@@ -188,10 +192,22 @@ def compute_metrics(beam_data):
 
         # AAV, LSV, MCS (Eq. 4, 5, 6) computed per pair of successive control points
         AAV_list, LSVL_list, LSVR_list = [], [], []
-        # additional aggregators for new metrics
-        edge_num = 0.0
+        edge_metric_num = 0.0
         alpo_num = 0.0
         leaf_motion_num = 0.0
+
+        def aperture_edge_lengths(gap):
+            """Return leaf-end (x) and leaf-side (y) lengths in mm."""
+            open_leaves = gap > 0
+            if not open_leaves.any():
+                return 0.0, 0.0
+
+            # x: two leaf ends per open leaf. y: the outer sides and all
+            # exposed step sides between neighboring leaves.
+            x_length = 2.0 * np.sum(leaf_widths[open_leaves])
+            y_length = gap[0] + gap[-1] + np.sum(np.abs(np.diff(gap)))
+            return x_length, y_length
+
         for i in range(n_cp - 1):
             left_i, right_i = mlc_positions[i]
             left_j, right_j = mlc_positions[i + 1]
@@ -213,12 +229,17 @@ def compute_metrics(beam_data):
             LSVL_list.append(lsv_bank(left_i, left_j))
             LSVR_list.append(lsv_bank(right_i, right_j))
 
-            # Edge metric (irregularity per area) -- MU-weighted
-            # approximate irregularity as sum of absolute differences between adjacent leaf gaps
-            irregularity = np.sum(np.abs(np.diff(gap_i)))
+            # Edge metric, M = sum(W_i * (C1*x_i + C2*y_i) / A_i).
+            # Segment geometry is the mean of its two control-point apertures.
+            x_i, y_i = aperture_edge_lengths(gap_i)
+            x_j, y_j = aperture_edge_lengths(gap_j)
+            seg_x = (x_i + x_j) / 2.0
+            seg_y = (y_i + y_j) / 2.0
             seg_area = (gap_i.sum() + gap_j.sum()) / 2.0
-            edge_comp = irregularity / (seg_area + 1e-9)
-            edge_num += mu_per_cp[i] * edge_comp
+            if seg_area > 0:
+                edge_metric_num += mu_per_cp[i] * (
+                    edge_c1 * seg_x + edge_c2 * seg_y
+                ) / seg_area
 
             # Average Leaf Pair Opening (ALPO): MU-weighted mean gap across open leaf pairs
             if open_leaves.sum() > 0:
@@ -234,7 +255,8 @@ def compute_metrics(beam_data):
         MCS = np.sum(AAV_arr * LSV_avg * mu_per_cp) / mu_total
 
         # finalize additional metrics
-        EdgeMetric = edge_num / mu_total if mu_total > 0 else np.nan
+        EdgeMetric = edge_metric_num / mu_total if mu_total > 0 else np.nan
+        EdgePenalty = edge_scaling * EdgeMetric
         AverageLP = alpo_num / mu_total if mu_total > 0 else np.nan
         # normalize leaf motion by (mu_total * union_area) to get a dimensionless factor
         norm_leaf_motion = leaf_motion_num / (mu_total * union_area + 1e-9) if mu_total > 0 else 0.0
@@ -247,7 +269,8 @@ def compute_metrics(beam_data):
             SAS_lt2mm=SAS2, SAS_lt5mm=SAS5, SAS_lt20mm=SAS20,
             mean_AAV=AAV_arr.mean(), mean_LSV=LSV_avg.mean(),
             MCS=MCS, union_area_mm2=union_area,
-            EdgeMetric=EdgeMetric, AverageLP=AverageLP, DCMI=DCMI,
+            EdgeMetric=EdgeMetric, EdgePenalty=EdgePenalty,
+            AverageLP=AverageLP, DCMI=DCMI,
         )
 
     return summary

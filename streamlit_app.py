@@ -11,6 +11,12 @@ st.title("Aperture Complexity Metrics — Batch RT Plan Processor")
 
 st.markdown("Upload multiple RT Plan DICOM files (.dcm). The app will compute aperture-based metrics and produce an Excel summary.")
 
+st.sidebar.header("Edge metric formula")
+edge_c1 = st.sidebar.number_input("C1: leaf-end weight", value=1.0, step=0.1)
+edge_c2 = st.sidebar.number_input("C2: leaf-side weight", value=1.0, step=0.1)
+edge_scaling = st.sidebar.number_input("C: penalty scaling factor", value=1.0, step=0.1)
+st.sidebar.caption("M = sum(Wi * (C1*xi + C2*yi) / Ai); P = C * M. Lengths are in mm and area is in mm^2.")
+
 uploaded = st.file_uploader("Upload RT Plan DICOM files", accept_multiple_files=True, type=["dcm"])
 
 if uploaded:
@@ -23,7 +29,13 @@ if uploaded:
         status_text.text(f"Processing {i}/{max_files}: {up.name}")
         try:
             data = up.read()
-            _, df = process_rp_bytes(data, filename=up.name)
+            _, df = process_rp_bytes(
+                data,
+                filename=up.name,
+                edge_c1=edge_c1,
+                edge_c2=edge_c2,
+                edge_scaling=edge_scaling,
+            )
             if not df.empty:
                 dfs.append(df)
         except Exception as e:

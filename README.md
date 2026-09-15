@@ -23,6 +23,22 @@ Usage
 - Upload multiple `.dcm` RT Plan files using the file picker.
 - The app will process files sequentially and provide a downloadable `aperture_metrics_summary.xlsx` workbook containing a `Summary` sheet.
 
+Edge metric
+
+The edge metric follows the supplied formula:
+
+`M = sum(Wi * (C1*xi + C2*yi) / Ai)` and `P = C * M`
+
+`Ai` is aperture area in mm^2, `xi` is exposed leaf-end length in mm, `yi` is exposed leaf-side length in mm, and `Wi` is the MU-delivered segment weight. `C1`, `C2`, and `C` are configurable in the Streamlit sidebar and default to 1.0. The exported `M` and `P` values have units of 1/mm when the constants are dimensionless.
+
+Output units
+
+- MU: monitor units
+- BA, MFA, and UAA: mm^2
+- MAD and ALPO: mm
+- Edge M and P: 1/mm
+- BM, MCS, and DCMI: dimensionless
+
 Notes
 
 - The app processes files in-memory and is designed for many small files (user indicated ~<5 MB each). For very large uploads or heavy concurrency, adjust to use temporary storage.
