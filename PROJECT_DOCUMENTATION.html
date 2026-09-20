@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aperture Complexity Metrics — Project Documentation</title>
+  <style>
+    :root { color-scheme: light dark; --ink:#1b2430; --muted:#566273; --paper:#fff; --page:#f3f6f9; --accent:#126e82; --line:#d9e1e8; --warning:#fff6db; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--page); color:var(--ink); font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    header { background:#073b4c; color:white; padding:3.5rem 1.5rem 2.8rem; }
+    header > div, main { max-width:1050px; margin:auto; }
+    h1 { font-size:clamp(2rem,5vw,3.25rem); line-height:1.1; margin:0 0 .7rem; }
+    header p { margin:0; font-size:1.15rem; max-width:760px; opacity:.94; }
+    main { background:var(--paper); padding:2.5rem clamp(1.2rem,4vw,4rem) 4rem; box-shadow:0 1px 5px #00000012; }
+    nav { margin:0 0 2.5rem; padding:1rem 1.2rem; background:#eaf5f7; border-left:4px solid var(--accent); }
+    nav a { margin-right:1.1rem; white-space:nowrap; color:#075e72; }
+    h2 { margin-top:3rem; border-bottom:1px solid var(--line); padding-bottom:.35rem; font-size:1.7rem; }
+    h3 { margin-top:2rem; font-size:1.22rem; }
+    a { color:#076b80; }
+    code, pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    code { background:#edf1f4; padding:.12em .28em; border-radius:3px; }
+    pre { overflow:auto; padding:1rem; background:#11212b; color:#edf8fa; border-radius:6px; }
+    .notice { padding:1rem 1.2rem; background:var(--warning); border-left:4px solid #c68b00; }
+    table { width:100%; border-collapse:collapse; margin:1.2rem 0; font-size:.94rem; }
+    th,td { text-align:left; vertical-align:top; padding:.7rem; border:1px solid var(--line); }
+    th { background:#edf5f7; }
+    li { margin:.35rem 0; }
+    @media (prefers-color-scheme: dark) { :root { --ink:#e6edf3; --muted:#b0bac5; --paper:#111820; --page:#0c1117; --accent:#5bd3df; --line:#34414d; --warning:#453500; } header{background:#06303e} nav,th{background:#12313a} code{background:#26323d} a{color:#71dbe6} }
+  </style>
+</head>
+<body>
+  <header><div><h1>Aperture Complexity Metrics</h1><p>Project documentation for users, clinical reviewers, analysts, and developers.</p></div></header>
+  <main>
+    <nav aria-label="Contents">
+      <a href="#overview">Overview</a><a href="#workflow">Workflow</a><a href="#metrics">Metrics</a><a href="#use">Using the app</a><a href="#code">Code guide</a><a href="#limits">Limits</a>
+    </nav>
+
+    <section id="overview">
+      <h2>Plain-language overview</h2>
+      <p>This project is a web application for examining the <em>geometric complexity</em> of radiotherapy treatment plans. A user uploads one or more RT Plan DICOM (<code>.dcm</code>) files and receives an Excel workbook of measurements for the treatment beams found in those plans.</p>
+      <p>In a modern radiotherapy machine, narrow metal leaves—called a multi-leaf collimator (MLC)—move while radiation is delivered. Together, the leaves form an opening, or <strong>aperture</strong>, that shapes the radiation beam. Openings that are small, irregular, off-centre, or changing rapidly can be more complex to deliver. This application turns that shape and motion information into numerical metrics that can be reviewed, compared, or used in a wider quality-assurance workflow.</p>
+      <p>The application makes the calculations repeatable and convenient: rather than manually extracting leaf positions and monitor units from every plan, a user can upload a batch of plans and download one spreadsheet.</p>
+      <div class="notice"><strong>Important clinical boundary.</strong> These measurements describe plan geometry and programmed delivery weights only. They do not calculate dose, verify delivery, assess patient safety, or decide whether a plan is clinically acceptable. Qualified clinical staff should interpret them alongside established validation and quality-assurance processes.</div>
+    </section>
+
+    <section>
+      <h2>Who it is for and key terms</h2>
+      <p>The application is intended for medical physicists, dosimetrists, researchers, and quality-assurance teams. Its usual workflow requires no programming: upload files, review the table, and download Excel. Developers can also reuse the calculation module from Python.</p>
+      <table><thead><tr><th>Term</th><th>Meaning here</th></tr></thead><tbody>
+        <tr><td>RT Plan DICOM</td><td>A standard medical-imaging file containing planned treatment-beam settings. The application accepts <code>.dcm</code> files.</td></tr>
+        <tr><td>Beam</td><td>One planned radiation delivery field or arc. Metrics are calculated separately for each eligible beam.</td></tr>
+        <tr><td>VMAT arc</td><td>A beam delivered while the gantry rotates and the MLC leaves may move. The program is principally aimed at this type of dynamic beam.</td></tr>
+        <tr><td>Control point / segment</td><td>A control point is a planned machine-position snapshot. Two adjacent control points form a delivery segment.</td></tr>
+        <tr><td>MU</td><td>Monitor units: the machine delivery quantity. Segments with more MU have more influence on MU-weighted metrics.</td></tr>
+        <tr><td>Aperture / leaf gap</td><td>The opening between MLC leaf banks for one leaf pair. Negative gaps are treated as closed.</td></tr>
+      </tbody></table>
+    </section>
+
+    <section id="workflow">
+      <h2>What happens when a plan is uploaded</h2>
+      <ol>
+        <li>The user chooses one or more RT Plan DICOM files in the browser.</li>
+        <li>The Streamlit interface reads each file in memory; it does not deliberately save the upload to a project folder.</li>
+        <li><code>pydicom</code> reads the DICOM content.</li>
+        <li>The extraction code finds eligible dynamic, MLC-equipped beams and gathers leaf boundaries, leaf positions, delivery weights, and planned MU.</li>
+        <li>The calculation code derives aperture areas and complexity metrics for each eligible beam.</li>
+        <li>The processing bridge forms and combines spreadsheet rows, previews the first 200, and creates <code>aperture_metrics_summary.xlsx</code> with a <code>Summary</code> sheet.</li>
+      </ol>
+      <pre>RT Plan DICOM file(s)
+        │
+        ▼
+streamlit_app.py                Browser screen: upload, progress, display, download
+        │
+        ▼
+metrics_runner.py               Read uploaded bytes and form spreadsheet rows
+        │
+        ▼
+Aperture_complexity_metrics.py  Extract beam data and calculate metrics
+        │
+        ▼
+Summary worksheet in Excel</pre>
+      <h3>Information included and excluded</h3>
+      <p>For each eligible beam, the software uses the planned beam MU from the first fraction group, MLC leaf-pair boundaries, MLC positions at every control point, and cumulative meterset weights. When a control point does not repeat an unchanged MLC position, the most recently stated position is carried forward.</p>
+      <p>A beam is included only if it has an <code>MLCX</code> or <code>MLCY</code> device, more than two control points, and a matching planned <code>BeamMeterset</code> in the first fraction group. The web interface includes all eligible beams; direct Python use can filter on selected beam names.</p>
+      <p>The current calculation does <strong>not</strong> use RT Structure Set, dose, imaging, patient anatomy, delivery logs, or jaw positions. It collects gantry angle but does not use it in a formula. It does not estimate clinical dose or outcome.</p>
+    </section>
+
+    <section>
+      <h2>How the calculation works</h2>
+      <p>For every control point, the program finds each leaf-pair opening:</p>
+      <pre>leaf gap = right-bank position − left-bank position</pre>
+      <p>A negative opening becomes zero. Each open gap is multiplied by that leaf pair’s width; the sum is the aperture area. A segment uses the average of the two surrounding control-point areas. Segment values are weighted by delivered MU, so portions that deliver more planned radiation have greater influence.</p>
+      <p>Metrics use the same foundation but highlight different characteristics. Compare values only where plan types, machines, workflow, and configuration are consistent.</p>
+    </section>
+
+    <section id="metrics">
+      <h2>Metrics in the Excel output</h2>
+      <table><thead><tr><th>Column</th><th>Meaning</th><th>Unit</th></tr></thead><tbody>
+        <tr><td>Plan ID</td><td>DICOM <code>PatientID</code>. Despite the heading, it is not necessarily a separate plan identifier.</td><td>—</td></tr>
+        <tr><td>No of MUs (MU)</td><td>Planned total monitor units for the beam.</td><td>MU</td></tr>
+        <tr><td>Beam Area (BA)</td><td>MU-weighted mean aperture area across segments.</td><td>mm²</td></tr>
+        <tr><td>Beam Modulation (BM)</td><td><code>1 − BA / union aperture area</code>; compares the average opening with its combined footprint.</td><td>Dimensionless</td></tr>
+        <tr><td>Mean Field Area (MFA)</td><td>MU-weighted mean segment area. It is calculated the same way as BA in this implementation, so both columns have the same value.</td><td>mm²</td></tr>
+        <tr><td>Mean Asymmetry Distance (MAD)</td><td>MU-weighted average distance of open leaf-pair centres from the central beam axis.</td><td>mm</td></tr>
+        <tr><td>Modulation Complexity Score (MCS)</td><td>MU-weighted combination of aperture-area and leaf-sequence variability.</td><td>Dimensionless</td></tr>
+        <tr><td>Edge Metric M</td><td>MU-weighted exposed aperture edge relative to aperture area, using configurable end and side weights.</td><td>1/mm*</td></tr>
+        <tr><td>Edge Penalty P</td><td>Edge Metric M multiplied by the configurable scaling factor <code>C</code>.</td><td>1/mm*</td></tr>
+        <tr><td>Union of Aperture Area (UAA)</td><td>Area formed by the largest observed opening of every leaf pair over the whole beam.</td><td>mm²</td></tr>
+        <tr><td>Average Leaf Pair Opening (ALPO)</td><td>MU-weighted mean opening across open leaf pairs.</td><td>mm</td></tr>
+        <tr><td>Dynamic complexity score-Modulation Index (DCMI)</td><td>MCS multiplied by normalised, MU-weighted leaf movement.</td><td>Dimensionless</td></tr>
+        <tr><td>Dynamic Aperture Entropy (ADE)</td><td>Normalised entropy of aperture changes multiplied by the MU-weighted mean normalised change.</td><td>Dimensionless</td></tr>
+      </tbody></table>
+      <p><small>* When all edge constants are dimensionless.</small></p>
+      <p>The core calculation also returns small-aperture scores below 2, 5, and 20 mm; mean AAV and LSV; and the intermediate dynamic entropy and dynamic aperture-change values. The current spreadsheet does not export them.</p>
+      <h3>Edge metric settings</h3>
+      <pre>M = sum over segments of [Wi × (C1 × xi + C2 × yi) / Ai] / total MU
+P = C × M</pre>
+      <p><code>Wi</code> is segment MU, <code>Ai</code> is segment area, <code>xi</code> is exposed leaf-end length, and <code>yi</code> is exposed leaf-side length. <code>C1</code> and <code>C2</code> weight ends and sides; <code>C</code> scales M to P. All default to 1.0. Use other settings only for a documented local reason, because results with different settings are not directly comparable.</p>
+      <h3>Dynamic Aperture Entropy</h3>
+      <p>For each control-point pair, the app measures average absolute leaf-gap change and divides it by the largest leaf opening in the beam. It places these changes in five equally sized bins, calculates a normalised Shannon entropy, and multiplies it by the MU-weighted mean normalised change. In plain terms, ADE reflects both how much apertures change and how varied the changes are.</p>
+    </section>
+
+    <section id="use">
+      <h2>Using the web application</h2>
+      <h3>First-time setup (Windows PowerShell)</h3>
+      <pre>python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt</pre>
+      <p>If PowerShell blocks activation for this session, the project includes the optional command below. It affects only the current PowerShell process; follow organisational security guidance.</p>
+      <pre>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force</pre>
+      <h3>Start and process</h3>
+      <pre>streamlit run streamlit_app.py</pre>
+      <ol><li>Leave <code>C1</code>, <code>C2</code>, and <code>C</code> at 1.0 unless local requirements say otherwise.</li><li>Upload one or more RT Plan DICOM files.</li><li>Wait for the progress indicator; failed files show a warning.</li><li>Review the preview table, then select <strong>Download Excel summary</strong>.</li></ol>
+      <p>The preview displays at most 200 rows; the downloaded workbook contains the full summary. It has one row per eligible beam, not necessarily one row per file. The current export does not include source filename or beam name, so preserve that relationship elsewhere when traceability matters.</p>
+    </section>
+
+    <section id="code">
+      <h2>Code guide and Python reuse</h2>
+      <table><thead><tr><th>File</th><th>Responsibility</th></tr></thead><tbody>
+        <tr><td><code>streamlit_app.py</code></td><td>Browser interface, upload, edge settings, results display, and Excel download.</td></tr>
+        <tr><td><code>metrics_runner.py</code></td><td>In-memory file reading, calculation calls, friendly worksheet headings, and combined results.</td></tr>
+        <tr><td><code>Aperture_complexity_metrics.py</code></td><td>DICOM extraction logic and metric formulas; includes a command-line example.</td></tr>
+        <tr><td><code>requirements.txt</code></td><td>Required Python packages.</td></tr>
+        <tr><td><code>metric_Execution_cmd_commands.txt</code></td><td>Convenience PowerShell setup and start commands.</td></tr>
+      </tbody></table>
+      <pre>from Aperture_complexity_metrics import extract_beam_data, compute_metrics
+
+beam_data = extract_beam_data("path/to/rtplan.dcm")
+metrics_by_beam = compute_metrics(beam_data)</pre>
+      <p>The result is a dictionary keyed by beam name. Use <code>beam_names=["CW", "CCW"]</code> to choose named beams. For uploaded bytes, database data, or a service, call <code>process_rp_bytes</code> in <code>metrics_runner.py</code>; it returns both detailed metrics and a pandas table.</p>
+    </section>
+
+    <section>
+      <h2>Data handling and privacy</h2>
+      <p>The browser workflow processes uploads in memory during the current app session. It reads DICOM <code>PatientID</code> and writes it to the spreadsheet’s <em>Plan ID</em> column. RT Plan files and identifiers may be sensitive health information. Use approved systems, access controls, storage, and sharing procedures; in-memory processing does not remove privacy, security, or retention obligations.</p>
+    </section>
+
+    <section id="limits">
+      <h2>Known limitations and practical checks</h2>
+      <ul>
+        <li>The program expects conventional RT Plan data with fraction group, beam, limiting-device, and control-point information. Missing or unusual data may trigger an error or warning.</li>
+        <li>Only the first fraction group is used for planned beam MU.</li>
+        <li>The first control point must provide usable MLC positions; later omitted positions are carried forward.</li>
+        <li>Beams without MLC, with two or fewer control points, or without matching planned MU are left out without a separate exclusion report.</li>
+        <li>If both MLCX and MLCY exist, the code chooses MLCX; it does not combine them.</li>
+        <li>No automated comparison with delivery logs or independent reference calculation is performed.</li>
+        <li>Zero-area cases can yield <code>NaN</code>; review them before later analysis.</li>
+        <li>The app is intended for relatively small batches. Larger uploads or high concurrent use may require different deployment and storage design.</li>
+      </ul>
+      <p>Before operational use, test representative plans—including expected exclusions and edge cases—against independently reviewed reference results.</p>
+    </section>
+
+    <section>
+      <h2>Reference</h2>
+      <p>The calculation module identifies its main source as Saroj et al., “Analysis of aperture-based complexity metrics for IMRT,” <em>Journal of Medical Physics</em>, volume 50, issue 1 (January–March 2025). The project uses a specific selection and interpretation of metrics; consult that paper and locally approved methodology for research or clinical quality-assurance use.</p>
+    </section>
+  </main>
+</body>
+</html>
