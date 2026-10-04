@@ -85,13 +85,21 @@ def extract_beam_data_from_dataset(rp, beam_names=None):
         n_leaves = len(leaf_widths)
 
         cps = beam.ControlPointSequence
-        cum_weight, mlc_positions, gantry_angles = [], [], []
+        cum_weight, mlc_positions, gantry_angles, dose_rates = [], [], [], []
 
         last_mlc = None
+        last_dose_rate = getattr(beam, "DoseRateSet", None)
         for cp in cps:
             cum_weight.append(float(cp.CumulativeMetersetWeight))
             ga = cp.get("GantryAngle", None)
             gantry_angles.append(float(ga) if ga is not None else None)
+
+            cp_dose_rate = cp.get("DoseRateSet", None)
+            if cp_dose_rate is not None:
+                last_dose_rate = float(cp_dose_rate)
+            dose_rates.append(
+                float(last_dose_rate) if last_dose_rate is not None else None
+            )
 
             mlc = last_mlc
             if "BeamLimitingDevicePositionSequence" in cp:
@@ -112,6 +120,8 @@ def extract_beam_data_from_dataset(rp, beam_names=None):
             n_leaves=n_leaves,
             leaf_widths=leaf_widths,
             gantry_angles=gantry_angles,
+            gantry_rotation_direction=getattr(beam, "GantryRotationDirection", None),
+            dose_rates=dose_rates,
             mlc_positions=mlc_positions,   # list of (left[n], right[n]) per CP
             mu_per_cp=mu_per_cp,           # MU per segment (length n_cp - 1)
         )
@@ -126,6 +136,9 @@ def compute_metrics(beam_data, edge_c1=1.0, edge_c2=1.0, edge_scaling=1.0):
     is the global factor C used to convert M into the edge penalty P.
     """
     summary = {}
+    plan_leaf_travel = []
+    plan_irregularity_num = 0.0
+    plan_mu_total = 0.0
 
     for beam_name, r in beam_data.items():
         n_leaves = r["n_leaves"]
@@ -134,6 +147,9 @@ def compute_metrics(beam_data, edge_c1=1.0, edge_c2=1.0, edge_scaling=1.0):
         mlc_positions = r["mlc_positions"]
         mu_per_cp = r["mu_per_cp"]
         mu_total = r["mu_total"]
+        gantry_angles = r.get("gantry_angles", [None] * n_cp)
+        dose_rates = r.get("dose_rates", [None] * n_cp)
+        rotation_direction = r.get("gantry_rotation_direction")
 
         # Aperture area at each control point
         AA = np.zeros(n_cp)
@@ -195,6 +211,14 @@ def compute_metrics(beam_data, edge_c1=1.0, edge_c2=1.0, edge_scaling=1.0):
         edge_metric_num = 0.0
         alpo_num = 0.0
         leaf_motion_num = 0.0
+        leaf_travel_segments = []
+        beam_irregularity_num = 0.0
+        dynamic_changes = []
+
+        reference_opening = max(
+            np.max(np.clip(right - left, 0, None))
+            for left, right in mlc_positions
+        )
 
         def aperture_edge_lengths(gap):
             """Return leaf-end (x) and leaf-side (y) lengths in mm."""
@@ -213,6 +237,13 @@ def compute_metrics(beam_data, edge_c1=1.0, edge_c2=1.0, edge_scaling=1.0):
             left_j, right_j = mlc_positions[i + 1]
             gap_i = np.clip(right_i - left_i, 0, None)
             gap_j = np.clip(right_j - left_j, 0, None)
+            leaf_motion = np.sum(np.abs(left_j - left_i) + np.abs(right_j - right_i))
+            leaf_motion_num += mu_per_cp[i] * leaf_motion
+            leaf_travel_segments.append(leaf_motion / (2.0 * n_leaves))
+            if reference_opening > 0:
+                dynamic_changes.append(np.mean(np.abs(gap_j - gap_i)) / reference_opening)
+            else:
+                dynamic_changes.append(0.0)
             max_gap = max(gap_i.max(), gap_j.max())
             if max_gap <= 0:
                 AAV_list.append(0.0); LSVL_list.append(0.0); LSVR_list.append(0.0)
@@ -235,29 +266,90 @@ def compute_metrics(beam_data, edge_c1=1.0, edge_c2=1.0, edge_scaling=1.0):
             x_j, y_j = aperture_edge_lengths(gap_j)
             seg_x = (x_i + x_j) / 2.0
             seg_y = (y_i + y_j) / 2.0
-            seg_area = (gap_i.sum() + gap_j.sum()) / 2.0
+            seg_perimeter = seg_x + seg_y
+            seg_area = (AA[i] + AA[i + 1]) / 2.0
             if seg_area > 0:
                 edge_metric_num += mu_per_cp[i] * (
                     edge_c1 * seg_x + edge_c2 * seg_y
                 ) / seg_area
+                segment_irregularity = seg_perimeter ** 2 / (4.0 * np.pi * seg_area)
+                beam_irregularity_num += mu_per_cp[i] * segment_irregularity
 
             # Average Leaf Pair Opening (ALPO): MU-weighted mean gap across open leaf pairs
             if open_leaves.sum() > 0:
                 alpo_seg = np.mean(gap_i[open_leaves])
                 alpo_num += mu_per_cp[i] * alpo_seg
 
-            # Leaf motion: MU-weighted sum of absolute leaf movements (left + right)
-            leaf_motion = np.sum(np.abs(left_j - left_i) + np.abs(right_j - right_i))
-            leaf_motion_num += mu_per_cp[i] * leaf_motion
-
         AAV_arr = np.array(AAV_list)
         LSV_avg = (np.array(LSVL_list) + np.array(LSVR_list)) / 2.0
         MCS = np.sum(AAV_arr * LSV_avg * mu_per_cp) / mu_total
+
+        # Aperture Dynamic Entropy: normalized entropy of five equal-width
+        # bins of normalized aperture changes, combined with MU-weighted change.
+        dynamic_changes_arr = np.array(dynamic_changes)
+        dynamic_change_mu = (
+            np.sum(dynamic_changes_arr * mu_per_cp) / mu_total
+            if mu_total > 0 else 0.0
+        )
+        dynamic_change_max = dynamic_changes_arr.max(initial=0.0)
+        if dynamic_change_max > 0 and len(dynamic_changes_arr) > 0:
+            bin_edges = np.linspace(0.0, dynamic_change_max, 6)
+            counts, _ = np.histogram(dynamic_changes_arr, bins=bin_edges)
+            probabilities = counts[counts > 0] / len(dynamic_changes_arr)
+            dynamic_entropy = (
+                -np.sum(probabilities * np.log(probabilities)) / np.log(5)
+            )
+            dynamic_entropy = max(0.0, float(dynamic_entropy))
+        else:
+            dynamic_entropy = 0.0
+        aperture_dynamic_entropy = dynamic_entropy * dynamic_change_mu
 
         # finalize additional metrics
         EdgeMetric = edge_metric_num / mu_total if mu_total > 0 else np.nan
         EdgePenalty = edge_scaling * EdgeMetric
         AverageLP = alpo_num / mu_total if mu_total > 0 else np.nan
+        MeanLeafTravel = (
+            float(np.mean(leaf_travel_segments)) if leaf_travel_segments else np.nan
+        )
+        BeamIrregularity = (
+            beam_irregularity_num / mu_total if mu_total > 0 else np.nan
+        )
+
+        # The supplied MDR definition uses absolute deviations from the mean
+        # control-point dose rate, normalized by total gantry travel in degrees.
+        valid_rates = np.array(
+            [np.nan if rate is None else float(rate) for rate in dose_rates],
+            dtype=float,
+        )
+        mdr = np.nan
+        has_complete_rates = np.isfinite(valid_rates).all()
+        has_complete_angles = (
+            len(gantry_angles) == len(valid_rates)
+            and all(angle is not None for angle in gantry_angles)
+        )
+        if (
+            has_complete_rates
+            and has_complete_angles
+            and np.any(valid_rates > 0)
+        ):
+            rate_reference = np.nanmean(valid_rates)
+            arc_distances = []
+            for previous_angle, current_angle in zip(gantry_angles[:-1], gantry_angles[1:]):
+                if rotation_direction == "CW":
+                    distance = (previous_angle - current_angle) % 360.0
+                elif rotation_direction == "CC":
+                    distance = (current_angle - previous_angle) % 360.0
+                else:
+                    difference = abs(current_angle - previous_angle) % 360.0
+                    distance = min(difference, 360.0 - difference)
+                arc_distances.append(distance)
+            arc_length = np.nansum(arc_distances)
+            if arc_length > 0:
+                mdr = np.nansum(np.abs(valid_rates - rate_reference)) / arc_length
+
+        plan_leaf_travel.append(MeanLeafTravel)
+        plan_irregularity_num += beam_irregularity_num
+        plan_mu_total += mu_total
         # normalize leaf motion by (mu_total * union_area) to get a dimensionless factor
         norm_leaf_motion = leaf_motion_num / (mu_total * union_area + 1e-9) if mu_total > 0 else 0.0
         # Dynamic complexity (DCMI) -- combine MCS and normalized leaf motion
@@ -271,7 +363,20 @@ def compute_metrics(beam_data, edge_c1=1.0, edge_c2=1.0, edge_scaling=1.0):
             MCS=MCS, union_area_mm2=union_area,
             EdgeMetric=EdgeMetric, EdgePenalty=EdgePenalty,
             AverageLP=AverageLP, DCMI=DCMI,
+            MeanLeafTravel_mm=MeanLeafTravel,
+            MeanDoseRateVariation=mdr,
+            BeamIrregularity=BeamIrregularity,
+            DynamicEntropy=dynamic_entropy,
+            DynamicApertureChange=dynamic_change_mu,
+            ADE=aperture_dynamic_entropy,
         )
+
+    plan_leaf_travel = [value for value in plan_leaf_travel if np.isfinite(value)]
+    plan_mlt = float(np.mean(plan_leaf_travel)) if plan_leaf_travel else np.nan
+    plan_pi = plan_irregularity_num / plan_mu_total if plan_mu_total > 0 else np.nan
+    for metrics in summary.values():
+        metrics["Plan_MLT_mm"] = plan_mlt
+        metrics["Plan_PI"] = plan_pi
 
     return summary
 

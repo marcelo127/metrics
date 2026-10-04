@@ -108,11 +108,16 @@ Summary worksheet in Excel</pre>
         <tr><td>Edge Penalty P</td><td>Edge Metric M multiplied by the configurable scaling factor <code>C</code>.</td><td>1/mm*</td></tr>
         <tr><td>Union of Aperture Area (UAA)</td><td>Area formed by the largest observed opening of every leaf pair over the whole beam.</td><td>mm²</td></tr>
         <tr><td>Average Leaf Pair Opening (ALPO)</td><td>MU-weighted mean opening across open leaf pairs.</td><td>mm</td></tr>
+        <tr><td>SAS (&lt;2 mm, &lt;5 mm, &lt;20 mm)</td><td>MU-weighted fraction of open leaf pairs narrower than each threshold.</td><td>Dimensionless</td></tr>
+        <tr><td>Mean Leaf Travel (MLT)</td><td>Mean absolute travel of both MLC banks per leaf pair and segment, averaged across segments for each beam.</td><td>mm</td></tr>
+        <tr><td>Plan Mean Leaf Travel (MLT)</td><td>Unweighted mean of beam MLT across eligible beams.</td><td>mm</td></tr>
+        <tr><td>Mean Dose Rate Variation</td><td>Sum of absolute control-point dose-rate deviations from their mean, divided by total gantry travel.</td><td>(MU/min)/degree</td></tr>
+        <tr><td>Plan Average Beam Irregularity (PI)</td><td>Beam irregularity weighted by planned MU; segment irregularity is perimeter squared divided by (4π times area).</td><td>Dimensionless</td></tr>
         <tr><td>Dynamic complexity score-Modulation Index (DCMI)</td><td>MCS multiplied by normalised, MU-weighted leaf movement.</td><td>Dimensionless</td></tr>
         <tr><td>Dynamic Aperture Entropy (ADE)</td><td>Normalised entropy of aperture changes multiplied by the MU-weighted mean normalised change.</td><td>Dimensionless</td></tr>
       </tbody></table>
       <p><small>* When all edge constants are dimensionless.</small></p>
-      <p>The core calculation also returns small-aperture scores below 2, 5, and 20 mm; mean AAV and LSV; and the intermediate dynamic entropy and dynamic aperture-change values. The current spreadsheet does not export them.</p>
+      <p>Mean dose-rate variation uses the mean available control-point dose rate as its reference and gantry travel in degrees as arc length. If dose rates are absent or all zero, the exported value is blank. PI and plan MLT are calculated across eligible MLC beams only. The calculation also returns mean AAV and LSV and intermediate dynamic entropy and dynamic aperture-change values, which are not exported.</p>
       <h3>Edge metric settings</h3>
       <pre>M = sum over segments of [Wi × (C1 × xi + C2 × yi) / Ai] / total MU
 P = C × M</pre>

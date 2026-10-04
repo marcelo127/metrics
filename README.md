@@ -38,6 +38,15 @@ Output units
 - MAD and ALPO: mm
 - Edge M and P: 1/mm
 - BM, MCS, and DCMI: dimensionless
+- ADE: normalized dynamic aperture entropy, dimensionless
+
+Dynamic aperture entropy
+
+The exported ADE value is `H_dynamic * D_MU`, where `H_dynamic` is the normalized
+Shannon entropy of five equal-width bins of normalized aperture changes between
+successive control points, and `D_MU` is the MU-weighted mean normalized change.
+The intermediate `H_dynamic` and `D_MU` values are also returned by
+`compute_metrics` as `DynamicEntropy` and `DynamicApertureChange`.
 
 Notes
 

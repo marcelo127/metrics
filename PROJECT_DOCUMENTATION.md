@@ -113,16 +113,21 @@ Several metrics are based on the same foundation but highlight different charact
 | Edge Penalty P | Edge Metric M multiplied by the configurable scaling factor `C`. | 1/mm when `C` is dimensionless | A scaled version of M, useful when a chosen local convention requires it. |
 | Union of Aperture Area (UAA) | Area formed by the maximum observed opening of every leaf pair over the whole beam. | mm² | The overall combined footprint of all apertures in the arc. |
 | Average Leaf Pair Opening (ALPO) | MU-weighted average opening across open leaf pairs. | mm | Typical opening size of leaves that are open. |
+| SAS (<2 mm, <5 mm, <20 mm) | MU-weighted fraction of open leaf pairs narrower than each threshold. | dimensionless | Indicates how much delivery uses small openings at each threshold. |
+| Mean Leaf Travel (MLT) | Mean absolute travel of the two MLC leaf banks per leaf pair and segment, averaged across segments for each beam. The plan value is the unweighted mean across eligible beams. | mm | Average leaf-tip travel between control points. |
+| Mean Dose Rate Variation | Sum of absolute control-point dose-rate deviations from the mean, divided by total gantry travel. | (MU/min)/degree | Dose-rate variation per degree of gantry rotation. Blank when usable dose-rate values or gantry angles are unavailable. |
+| Plan Average Beam Irregularity (PI) | Beam irregularity weighted by each eligible beam's planned MU; segment irregularity is `perimeter² / (4π × area)` and is MU-weighted within each beam. | dimensionless | Plan-level aperture-shape irregularity across eligible MLC beams. |
 | Dynamic complexity score-Modulation Index (DCMI) | MCS multiplied by MU-weighted leaf motion normalised by union aperture area. | dimensionless | Combines an aperture-complexity score with a normalised measure of leaf movement. |
 | Dynamic Aperture Entropy (ADE) | Normalised entropy of aperture changes multiplied by the MU-weighted mean normalised change. | dimensionless | Captures both how varied the changes are and how large they are overall. |
 
-The calculation function also returns, but the web spreadsheet does not currently export, the following intermediate values:
+The calculation function also returns the per-beam and plan metrics above. It additionally returns these intermediate values, which the web spreadsheet does not export:
 
-- `SAS_lt2mm`, `SAS_lt5mm`, and `SAS_lt20mm`: small-aperture scores, measuring the MU-weighted share of open leaf pairs below the stated gap threshold.
 - `mean_AAV`: average aperture-area variability term.
 - `mean_LSV`: average leaf-sequence variability term.
 - `DynamicEntropy`: the normalised entropy component used by ADE.
 - `DynamicApertureChange`: the MU-weighted aperture-change component used by ADE.
+
+MLT follows the supplied definition: for each segment, average absolute travel across both MLC banks, then average segment values within each beam; the plan MLT is the unweighted mean across eligible beams. PI uses the extracted eligible MLC beams. Mean dose-rate variation uses the mean available control-point dose rate as its reference and gantry travel in degrees as arc length. If dose rates are absent or all zero, the exported value is blank rather than a misleading zero. These definitions depend on the plan metadata and should be reviewed for the local clinical/research convention before comparing plans.
 
 ### Edge metric configuration
 
